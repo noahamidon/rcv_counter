@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EPAC — Ranked-Choice Count</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,300..900,0..100,0..1&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 40 40" width="40" height="40">
+          <circle cx="20" cy="20" r="18" fill="none" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M 12 20 L 18 26 L 28 14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="square" stroke-linejoin="miter"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <div class="brand-title">EPAC</div>
+        <div class="brand-sub">Ranked-Choice Count · Single Transferable Vote</div>
+      </div>
+    </div>
+    <div class="masthead-note">Ballots processed in-browser · nothing uploaded</div>
+  </div>
+</header>
+
+<main>
+
+  <!-- ───────── SCREEN 1: UPLOAD ───────── -->
+  <section id="screen-upload" class="screen active">
+    <div class="wrap">
+      <div class="hero">
+        <div class="hero-eyebrow">Step 1 · Intake</div>
+        <h1 class="hero-title">Upload a ballot export.</h1>
+        <p class="hero-lede">Drop the raw CSV you downloaded from the Dartmouth survey tool. The counter auto-detects the rank columns and separates distinct ranked-choice races — whether the file has 1 race (Fall) or 3 (Spring).</p>
+      </div>
+
+      <label id="drop-zone" class="drop-zone" for="file-input">
+        <div class="drop-icon" aria-hidden="true">
+          <svg viewBox="0 0 48 48" width="48" height="48">
+            <path d="M24 32 L24 10 M14 20 L24 10 L34 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/>
+            <path d="M8 36 L8 40 L40 40 L40 36" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/>
+          </svg>
+        </div>
+        <div class="drop-primary">Drop CSV here, or click to browse</div>
+        <div class="drop-secondary">Raw Dartmouth survey export · <span class="mono">.csv</span></div>
+        <input type="file" id="file-input" accept=".csv,text/csv" hidden />
+      </label>
+
+      <details class="fine-print">
+        <summary>How races are detected</summary>
+        <ul>
+          <li>Rank columns match the pattern <span class="mono">"Please rank the candidates ... - N"</span>.</li>
+          <li>Contiguous blocks of rank columns are grouped into separate races (e.g. the Spring export has three).</li>
+          <li>Each race's true class comes from the "balloted candidates for the Class of XXXX..." column right before it — the rank-column headers themselves can be mislabeled. The tool flags any disagreement.</li>
+          <li>Blank cells are skipped. Empty ballots are counted but don't contribute.</li>
+          <li>Your data never leaves your laptop. There is no backend.</li>
+        </ul>
+      </details>
+
+      <div id="upload-error" class="error hidden"></div>
+    </div>
+  </section>
+
+  <!-- ───────── SCREEN 2: REVIEW & CONFIGURE ───────── -->
+  <section id="screen-review" class="screen">
+    <div class="wrap">
+
+      <div class="breadcrumb">
+        <span>Upload</span>
+        <span class="sep">/</span>
+        <span class="current">Review</span>
+        <span class="sep">/</span>
+        <span>Count</span>
+      </div>
+
+      <h1 id="review-screen-title" class="screen-title">Confirm the ballot before counting.</h1>
+
+      <!-- Race tabs (hidden when only one race) -->
+      <nav id="race-tabs" class="race-tabs hidden" aria-label="Select race"></nav>
+
+      <!-- Header-class mismatch warning banner (hidden unless flagged) -->
+      <div id="race-banner" class="banner-warn hidden"></div>
+
+      <div class="stats-strip">
+        <div class="stat">
+          <div class="stat-num" id="stat-ballots">—</div>
+          <div class="stat-label">valid ballots</div>
+        </div>
+        <div class="stat">
+          <div class="stat-num" id="stat-empty">—</div>
+          <div class="stat-label">empty rows</div>
+        </div>
+        <div class="stat">
+          <div class="stat-num" id="stat-candidates">—</div>
+          <div class="stat-label">candidates detected</div>
+        </div>
+        <div class="stat">
+          <div class="stat-num" id="stat-writeins">—</div>
+          <div class="stat-label">write-ins flagged</div>
+        </div>
+      </div>
+
+      <div id="merge-panel" class="panel hidden">
+        <div class="panel-head">
+          <h2>Suggested name merges</h2>
+          <p class="panel-sub">These candidates look like the same person with minor differences. Confirm to merge, or leave unchecked to keep them separate.</p>
+        </div>
+        <div id="merge-list" class="merge-list"></div>
+      </div>
+
+      <div id="writein-panel" class="panel hidden">
+        <div class="panel-head">
+          <h2>Write-in review</h2>
+          <p class="panel-sub">Voters left free-form responses in this race's write-in column. Decide what to do with each. Anything not assigned is dropped from the count.</p>
+        </div>
+        <div id="writein-list" class="writein-list"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Candidates on the ballot</h2>
+          <p class="panel-sub">Sorted by first-preference tally. Tick to exclude from the count (e.g. a candidate who has already declined).</p>
+        </div>
+        <div id="candidate-list" class="candidate-list"></div>
+      </div>
+
+      <div class="panel seats-panel">
+        <div class="panel-head">
+          <h2>Seats to fill</h2>
+          <p class="panel-sub">EPAC's General Senator races default to 2. If a winner later declines, come back and add a seat to promote the next candidate.</p>
+        </div>
+        <div class="seats-control">
+          <button class="seats-btn" id="seats-dec" type="button" aria-label="Decrease">−</button>
+          <input type="number" id="seats-input" value="2" min="1" max="99" />
+          <button class="seats-btn" id="seats-inc" type="button" aria-label="Increase">+</button>
+        </div>
+      </div>
+
+      <div class="action-row">
+        <button class="btn-secondary" id="back-to-upload" type="button">← Upload a different file</button>
+        <div class="action-group">
+          <button class="btn-ghost hidden" id="next-race" type="button">Next race →</button>
+          <button class="btn-primary" id="run-count" type="button">Run the count →</button>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ───────── SCREEN 3: RESULTS ───────── -->
+  <section id="screen-results" class="screen">
+    <div class="wrap">
+
+      <div class="breadcrumb">
+        <span>Upload</span>
+        <span class="sep">/</span>
+        <span>Review</span>
+        <span class="sep">/</span>
+        <span class="current">Count</span>
+      </div>
+
+      <div id="result-head" class="result-head"></div>
+
+      <div id="results-stack"></div>
+
+      <div class="action-row">
+        <button class="btn-secondary" id="back-to-review" type="button">← Back to review</button>
+        <div class="download-group">
+          <button class="btn-ghost" id="download-csv" type="button">Download results CSV</button>
+          <button class="btn-ghost" id="download-json" type="button">Download audit JSON</button>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+</main>
+
+<footer class="endnote">
+  <div class="wrap">
+    <span>WIGM / Droop-quota STV · Dartmouth EPAC</span>
+    <span class="endnote-sep">·</span>
+    <a href="https://github.com/" id="gh-link">Source &amp; docs →</a>
+  </div>
+</footer>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
