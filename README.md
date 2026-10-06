@@ -37,7 +37,10 @@ round-by-round tally and downloadable audit log.
   write-in review, candidate exclusions, and seat count. Switch between races
   with a tab bar; a single-race file hides the tabs entirely.
 - **Write-in review** — every free-form write-in response is surfaced with an
-  auto-parsed interpretation the admin confirms, rejects, or reassigns.
+  auto-parsed interpretation the admin confirms, rejects, or reassigns. Per
+  EPAC rules a write-in voter lists their whole ranking in the write-in box, so
+  a counted write-in *replaces* that row's rank-column choices. Rows that both
+  ranked and wrote in are flagged as rule violations for EPAC to resolve.
   Nothing is silently dropped or silently accepted.
 - **Name normalization** — `"Willow Dubrovin"` and `"Willow DuBrovin"` are
   flagged as a likely merge for admin confirmation. Scoped per race.
@@ -122,7 +125,8 @@ from `main` → `/docs`.
 │   ├── normalize.js     name-merge suggestions
 │   └── stv.js           WIGM / Droop-quota STV algorithm
 ├── test/
-│   └── stv.test.js      unit tests (run with `node --test`)
+│   ├── parse.test.js    race-detection & write-in parsing tests
+│   └── stv.test.js      STV algorithm tests (run with `node --test`)
 ├── sample-data/
 │   └── sample-ballots.csv   synthetic single-race example
 ├── .nojekyll            tells GitHub Pages not to Jekyll-process
@@ -158,7 +162,7 @@ from `main` → `/docs`.
 Run the included tests with Node 18+:
 
 ```bash
-node --test test/stv.test.js
+node --test test/
 ```
 
 Verified behavior:

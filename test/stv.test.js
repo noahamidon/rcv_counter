@@ -140,3 +140,24 @@ test("refuses to run if seats > available candidates", () => {
     /seats/i
   );
 });
+
+test("zero surplus: ballots of a candidate elected at exactly quota don't transfer", () => {
+  // 9 ballots, 2 seats -> quota = floor(9/3)+1 = 4.
+  // A hits exactly 4 in round 1 (surplus 0). If A's ballots wrongly moved on at
+  // full weight, B would jump to 6 and win; instead C (3) beats B (2).
+  const ballots = mkBallots([
+    ["A", "B"], ["A", "B"], ["A", "B"], ["A", "B"],
+    ["B"], ["B"],
+    ["C"], ["C"], ["C"]
+  ]);
+  const r = runSTV({ ballots, candidates: ["A", "B", "C"], seats: 2 });
+  assert.deepEqual(r.winners, ["A", "C"]);
+  const round2 = new Map(r.rounds[1].tally);
+  assert.equal(round2.get("B"), 2);
+});
+
+test("rejects non-positive or fractional seat counts", () => {
+  const ballots = mkBallots([["A"], ["B"]]);
+  assert.throws(() => runSTV({ ballots, candidates: ["A", "B"], seats: 0 }), /seats/i);
+  assert.throws(() => runSTV({ ballots, candidates: ["A", "B"], seats: NaN }), /seats/i);
+});

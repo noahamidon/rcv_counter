@@ -28,6 +28,9 @@ export function runSTV({ ballots, candidates, seats, excluded = [], tieBreaker =
 
   const activeCandidates = candidates.filter(c => !excluded.has(c));
 
+  if (!Number.isInteger(seats) || seats < 1) {
+    throw new Error(`Seats must be a positive whole number (got ${seats}).`);
+  }
   if (seats > activeCandidates.length) {
     throw new Error(`Asked for ${seats} seats but only ${activeCandidates.length} candidates available after exclusions.`);
   }
@@ -84,7 +87,9 @@ export function runSTV({ ballots, candidates, seats, excluded = [], tieBreaker =
       const b = workingBallots[i];
       const p = advance(b, i);
       if (p === -1) {
-        exhausted++;
+        // Ballots whose weight was fully used up electing someone (surplus 0)
+        // aren't "exhausted" in any meaningful sense — don't count them.
+        if (b.weight > EPSILON) exhausted++;
         exhaustedWeight += b.weight;
       } else {
         const c = b.ranking[p];
@@ -103,7 +108,7 @@ export function runSTV({ ballots, candidates, seats, excluded = [], tieBreaker =
     for (const past of pastTallies) {
       const values = tied.map(c => past.get(c) ?? 0);
       const best = (mode === "lowest") ? Math.min(...values) : Math.max(...values);
-      const winners = tied.filter(c => (past.get(c) ?? 0) === best);
+      const winners = tied.filter(c => Math.abs((past.get(c) ?? 0) - best) < EPSILON);
       if (winners.length < tied.length) {
         return breakTie(winners, mode, pastTallies); // recursive narrowing
       }
@@ -171,12 +176,14 @@ export function runSTV({ ballots, candidates, seats, excluded = [], tieBreaker =
         // Surplus transfer. WIGM: every ballot currently counting for this
         // candidate has its weight multiplied by (surplus / total), then the
         // ballot moves to its next hopeful preference on the next tally pass.
-        const surplus = v - quota;
+        // This must run even when surplus is 0: the ballots still advance past
+        // the elected candidate, and they must do so carrying zero weight.
+        const surplus = Math.max(0, v - quota);
+        const fraction = surplus / v;
+        for (const bi of contributors.get(c)) {
+          workingBallots[bi].weight *= fraction;
+        }
         if (surplus > EPSILON) {
-          const fraction = surplus / v;
-          for (const bi of contributors.get(c)) {
-            workingBallots[bi].weight *= fraction;
-          }
           roundEntry.events.push({
             type: "transfer",
             from: c,
@@ -229,8 +236,9 @@ export function runSTV({ ballots, candidates, seats, excluded = [], tieBreaker =
     rounds.push(roundEntry);
   }
 
-  // Final exhausted count
-  const finalState = currentTally();
+  // Exhausted totals as of the last round counted. (Re-tallying after the
+  // final election would wrongly count ballots sitting with the last winners.)
+  const lastRound = rounds[rounds.length - 1];
 
   return {
     seats,
@@ -240,8 +248,8 @@ export function runSTV({ ballots, candidates, seats, excluded = [], tieBreaker =
     electedDetail: elected,
     eliminatedDetail: eliminated,
     rounds,
-    exhaustedBallots: finalState.exhausted,
-    exhaustedWeight: finalState.exhaustedWeight,
+    exhaustedBallots: lastRound?.exhausted ?? 0,
+    exhaustedWeight: lastRound?.exhaustedWeight ?? 0,
     excluded: [...excluded]
   };
 }
