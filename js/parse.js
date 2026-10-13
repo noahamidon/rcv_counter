@@ -196,26 +196,49 @@ function buildRaceBallots(race, dataRows) {
   race.candidates = [...candidateFirstSeen.keys()];
 }
 
+// Write-ins arrive in every format imaginable: "1. Ann Lee 2. Bo Kim",
+// "Ann Lee, 1, Bo Kim, 2", "Ann Lee 1", "Rank 1: Ann Lee", "Ann Lee Name"...
+// Rather than matching formats, split the text into a sequence of name and
+// number tokens and pair each number with its adjacent name.
+const FILLER_WORD_RE = /(?<!\p{L})(rank(?:ed)?|name|choice|place)(?!\p{L})/giu;
+const AND_RE = /(?<!\p{L})and(?!\p{L})|&/giu;
+const TOKEN_RE = /(\d+)|(\p{L}[\p{L}\p{M}'’".\- ]*)/gu;
+
 export function parseWriteInText(raw) {
   const cleaned = raw.replace(/\s+/g, " ").trim();
   if (!cleaned) return [];
-  if (/,\s*\d+\s*;/.test(cleaned) || /,\s*\d+\s*$/.test(cleaned)) {
-    const parts = cleaned.split(/;|\band\b/i).map(p => p.trim()).filter(Boolean);
-    const out = [];
-    for (const part of parts) {
-      const m = part.match(/^(.+?),\s*(\d+)\s*$/);
-      if (m) out.push({ name: m[1].trim(), rank: parseInt(m[2], 10) });
+
+  const text = cleaned
+    .replace(/(\d+)(?:st|nd|rd|th)(?!\p{L})/giu, "$1")
+    .replace(FILLER_WORD_RE, " ")
+    .replace(AND_RE, ",");
+
+  const tokens = [];
+  for (const m of text.matchAll(TOKEN_RE)) {
+    if (m[1]) { tokens.push({ num: parseInt(m[1], 10) }); continue; }
+    const name = m[2].replace(/^["'’\s]+|["'’\s.\-]+$/g, "").replace(/\s+/g, " ");
+    if ((name.match(/\p{L}/gu) || []).length >= 2) tokens.push({ name });
+  }
+  if (!tokens.some(t => t.name)) return null;
+
+  // Numbers lead ("1. Ann") or trail ("Ann, 1") their names — decided by
+  // whichever kind of token comes first.
+  const numFirst = tokens[0].num !== undefined;
+  const items = [];
+  let pendingRank = null;
+  for (const t of tokens) {
+    if (t.name) {
+      items.push({ name: t.name, rank: numFirst ? pendingRank : null });
+      pendingRank = null;
+    } else if (numFirst) {
+      pendingRank = t.num;
+    } else if (items.length && items[items.length - 1].rank == null) {
+      items[items.length - 1].rank = t.num;
     }
-    if (out.length) return out;
   }
-  const numbered = [...cleaned.matchAll(
-    /(?:rank\s*)?(\d+)\s*[\.\):]\s*([A-Za-z][A-Za-z\-\.' ]+?)(?=\s*(?:(?:rank\s*)?\d+\s*[\.\):])|$)/gi
-  )];
-  if (numbered.length >= 1) {
-    return numbered.map(m => ({ name: m[2].trim(), rank: parseInt(m[1], 10) }));
-  }
-  if (/^[A-Za-z][A-Za-z\-\.' ]+$/.test(cleaned)) {
-    return [{ name: cleaned, rank: 1 }];
-  }
-  return null;
+
+  // Names with no stated rank go after the ranked ones, in written order.
+  let next = Math.max(0, ...items.map(i => i.rank ?? 0));
+  for (const it of items) if (it.rank == null) it.rank = ++next;
+  return items;
 }

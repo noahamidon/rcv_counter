@@ -126,6 +126,7 @@ from `main` → `/docs`.
 │   └── stv.js           WIGM / Droop-quota STV algorithm
 ├── test/
 │   ├── parse.test.js    race-detection & write-in parsing tests
+│   ├── normalize.test.js  name-merge suggestion tests
 │   └── stv.test.js      STV algorithm tests (run with `node --test`)
 ├── sample-data/
 │   └── sample-ballots.csv   synthetic single-race example

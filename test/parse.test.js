@@ -50,6 +50,25 @@ test("parseWriteInText: empty / whitespace returns empty list", () => {
   assert.deepEqual(parseWriteInText("   \t  "), []);
 });
 
+test("parseWriteInText: 'Name, rank, Name, rank' comma lists", () => {
+  const out = parseWriteInText("Vanna Lei, 1, Justus Gabbard, 2, Reid Barry, 3, Stas Kolodkin");
+  assert.deepEqual(out.map(p => p.name), ["Vanna Lei", "Justus Gabbard", "Reid Barry", "Stas Kolodkin"]);
+  assert.deepEqual(out.map(p => p.rank), [1, 2, 3, 4]);
+});
+
+test("parseWriteInText: trailing rank number and filler words are stripped", () => {
+  assert.deepEqual(parseWriteInText("Henry Gillibrand 1"), [{ name: "Henry Gillibrand", rank: 1 }]);
+  assert.deepEqual(parseWriteInText("Lydia Lin Name"), [{ name: "Lydia Lin", rank: 1 }]);
+  assert.equal(parseWriteInText("Name1"), null);
+});
+
+test("parseWriteInText: mixed separators and ordinals", () => {
+  const out = parseWriteInText("Maxwell Corbett,1 : Stas Kolodkin,2: Jackson Loftus");
+  assert.deepEqual(out.map(p => p.name), ["Maxwell Corbett", "Stas Kolodkin", "Jackson Loftus"]);
+  const ord = parseWriteInText("1st Florence Liu 2nd Max Corbett");
+  assert.deepEqual(ord.map(p => p.name), ["Florence Liu", "Max Corbett"]);
+});
+
 // ─── Race detection (needs a PapaParse shim in Node) ───
 // We import the full module only if PapaParse is available. Below we shim a
 // minimal Papa.parse and then dynamically import parse.js.

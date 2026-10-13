@@ -323,24 +323,46 @@ main { min-height: calc(100vh - 120px); }
 
 /* ───── Merge list ───── */
 .merge-list { padding: 0; }
-.merge-row {
-  padding: 16px 24px;
+.merge-bulk {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
   border-bottom: 1px solid var(--rule-soft);
-}
-.merge-row:last-child { border-bottom: none; }
-.merge-row label {
-  display: flex; gap: 12px; align-items: flex-start; cursor: pointer;
-}
-.merge-row input { margin-top: 4px; accent-color: var(--forest); }
-.merge-variants {
   font-family: var(--ff-mono);
-  font-size: 13px;
-  color: var(--ink-soft);
-  line-height: 1.6;
+  font-size: 12px;
+  color: var(--ink-muted);
 }
-.merge-variants .arrow { color: var(--forest); margin: 0 6px; }
-.merge-canonical { color: var(--ink); font-weight: 600; }
-.merge-reason { margin-top: 4px; font-size: 12px; color: var(--ink-muted); }
+.merge-bulk span { margin-right: auto; }
+.btn-small { padding: 6px 12px; font-size: 12px; }
+.merge-group { border-bottom: 1px solid var(--rule-soft); }
+.merge-group:last-child { border-bottom: none; }
+.merge-target {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 14px 24px 6px;
+}
+.merge-canonical { font-family: var(--ff-display); font-size: 18px; font-weight: 500; color: var(--ink); }
+.merge-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 24px 6px 36px;
+  cursor: pointer;
+}
+.merge-row:last-child { padding-bottom: 14px; }
+.merge-row:hover { background: var(--paper-warm); }
+.merge-row input { accent-color: var(--forest); margin: 0; }
+.merge-variant { font-family: var(--ff-mono); font-size: 13px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.merge-reason { font-size: 12px; color: var(--ink-muted); }
+.merge-count {
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
 
 /* ───── Write-in list ───── */
 .writein-row {
@@ -742,6 +764,8 @@ main { min-height: calc(100vh - 120px); }
   .cand-row { border-right: none; }
   .writein-row { grid-template-columns: 1fr; gap: 8px; }
   .rerun-grid { grid-template-columns: 1fr; }
+  .merge-row { grid-template-columns: 20px minmax(0, 1fr) auto; padding-left: 24px; }
+  .merge-row .merge-reason { grid-column: 2 / -1; }
   .seats-panel { flex-direction: column; align-items: stretch; }
   .seats-control { justify-content: center; padding-top: 0; }
   .rerun-card { border-right: none; border-bottom: 1px solid var(--rule-soft); }
