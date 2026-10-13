@@ -245,7 +245,14 @@ function renderMergePanel() {
   const rs = activeRaceState();
   const panel = document.getElementById("merge-panel");
   const list = document.getElementById("merge-list");
-  const suggestions = suggestMerges(candidatesForRace(race.id, { applyMergeMap: false }));
+
+  // How many ballots name each spelling (pre-merge) — shown to the admin and
+  // used to pick the canonical spelling of each group.
+  const weights = new Map();
+  for (const b of ballotsForRace(race.id, { applyMergeMap: false })) {
+    for (const n of b.ranking) weights.set(n, (weights.get(n) ?? 0) + 1);
+  }
+  const suggestions = suggestMerges([...weights.keys()], { weights, protectedNames: race.candidates });
 
   if (suggestions.length === 0) {
     panel.classList.add("hidden");
@@ -254,31 +261,57 @@ function renderMergePanel() {
   panel.classList.remove("hidden");
   list.innerHTML = "";
 
-  for (const sug of suggestions) {
-    const variants = sug.variants.filter(v => v !== sug.canonical);
-    const row = document.createElement("div");
-    row.className = "merge-row";
-    const checked = variants.every(v => rs.merges.get(v) === sug.canonical);
-    row.innerHTML = `
-      <label>
-        <input type="checkbox" ${checked ? "checked" : ""} />
-        <div>
-          <div class="merge-variants">
-            ${variants.map(v => `<span>"${escapeHtml(v)}"</span>`).join(` <span class="arrow">+</span> `)}
-            <span class="arrow">→</span>
-            <span class="merge-canonical">"${escapeHtml(sug.canonical)}"</span>
-          </div>
-          <div class="merge-reason">${escapeHtml(sug.reason)}</div>
-        </div>
-      </label>
+  const accepted = suggestions.filter(s => rs.merges.get(s.variant) === s.canonical).length;
+  const bulk = document.createElement("div");
+  bulk.className = "merge-bulk";
+  bulk.innerHTML = `
+    <span>${accepted} of ${plural(suggestions.length, "suggestion")} accepted</span>
+    <button type="button" class="btn-ghost btn-small" data-bulk="all">Accept all</button>
+    <button type="button" class="btn-ghost btn-small" data-bulk="none">Clear all</button>
+  `;
+  bulk.querySelector('[data-bulk="all"]').addEventListener("click", () => {
+    for (const s of suggestions) rs.merges.set(s.variant, s.canonical);
+    renderReview();
+  });
+  bulk.querySelector('[data-bulk="none"]').addEventListener("click", () => {
+    for (const s of suggestions) rs.merges.delete(s.variant);
+    renderReview();
+  });
+  list.appendChild(bulk);
+
+  // One block per target candidate, listing every spelling that maps to it.
+  const groups = new Map();
+  for (const s of suggestions) {
+    if (!groups.has(s.canonical)) groups.set(s.canonical, []);
+    groups.get(s.canonical).push(s);
+  }
+  for (const [canonical, sugs] of groups) {
+    const group = document.createElement("div");
+    group.className = "merge-group";
+    group.innerHTML = `
+      <div class="merge-target">
+        <span class="merge-canonical">${escapeHtml(canonical)}</span>
+        <span class="merge-count">${plural(weights.get(canonical) ?? 0, "ballot")}</span>
+      </div>
     `;
-    const cb = row.querySelector("input");
-    cb.addEventListener("change", () => {
-      if (cb.checked) for (const v of variants) rs.merges.set(v, sug.canonical);
-      else for (const v of variants) rs.merges.delete(v);
-      renderReview();
-    });
-    list.appendChild(row);
+    for (const sug of sugs) {
+      const row = document.createElement("label");
+      row.className = "merge-row";
+      row.innerHTML = `
+        <input type="checkbox" ${rs.merges.get(sug.variant) === canonical ? "checked" : ""} />
+        <span class="merge-variant">"${escapeHtml(sug.variant)}"</span>
+        <span class="merge-reason">${escapeHtml(sug.reason)}</span>
+        <span class="merge-count">${plural(weights.get(sug.variant) ?? 0, "ballot")}</span>
+      `;
+      const cb = row.querySelector("input");
+      cb.addEventListener("change", () => {
+        if (cb.checked) rs.merges.set(sug.variant, canonical);
+        else rs.merges.delete(sug.variant);
+        renderReview();
+      });
+      group.appendChild(row);
+    }
+    list.appendChild(group);
   }
 }
 
