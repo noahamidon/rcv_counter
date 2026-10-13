@@ -88,7 +88,20 @@ function detectRaces(header) {
   }
   if (current.length) groups.push(current);
 
-  return groups.map((grp, idx) => buildRaceMeta(header, grp, idx));
+  const races = groups.map((grp, idx) => buildRaceMeta(header, grp, idx));
+
+  // Two blocks can resolve to the same class (e.g. a mislabeled header with no
+  // anchors). Race ids key all per-race UI state, so they must be unique.
+  const seenIds = new Map();
+  for (const race of races) {
+    const n = (seenIds.get(race.id) ?? 0) + 1;
+    seenIds.set(race.id, n);
+    if (n > 1) {
+      race.id += `-${n}`;
+      race.className += ` (${n})`;
+    }
+  }
+  return races;
 }
 
 function buildRaceMeta(header, rankCols, groupIdx) {

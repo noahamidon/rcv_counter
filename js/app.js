@@ -37,7 +37,13 @@ function clearUploadError() {
 }
 
 dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("dragging"); });
-dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragging"));
+dropZone.addEventListener("dragleave", e => {
+  // Ignore dragleave fired when moving between the zone's own children.
+  if (!dropZone.contains(e.relatedTarget)) dropZone.classList.remove("dragging");
+});
+dropZone.addEventListener("keydown", e => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
+});
 dropZone.addEventListener("drop", e => {
   e.preventDefault();
   dropZone.classList.remove("dragging");
@@ -62,10 +68,14 @@ function handleFile(file) {
       state.parsed = parseSurveyCsv(reader.result);
       // Initialize per-race state.
       state.raceState.clear();
+      // Write-in defaults are set here, not on first render, so a race whose
+      // tab is never opened still counts its write-ins the same way.
       for (const race of state.parsed.races) {
         state.raceState.set(race.id, {
           merges: new Map(),
-          writeInAssignments: new Map(),
+          writeInAssignments: new Map(
+            race.writeIns.map(w => [w.originalIndex, w.parsed?.length ? "__accept__" : "__drop__"])
+          ),
           excluded: new Set(),
           seats: 2,
           result: null
@@ -94,7 +104,9 @@ function tallyFirstPreferences(ballots) {
   return t;
 }
 
-function ballotsForRace(raceId) {
+// `applyMergeMap: false` gives the pre-merge view, which merge suggestions are
+// computed from — otherwise an accepted merge would hide its own suggestion.
+function ballotsForRace(raceId, { applyMergeMap = true } = {}) {
   const race = getRaceById(raceId);
   const rs = state.raceState.get(raceId);
   if (!race || !rs) return [];
@@ -103,10 +115,13 @@ function ballotsForRace(raceId) {
     ranking: [...b.ranking], weight: 1, originalIndex: b.originalIndex
   }));
 
-  const mergeMap = Object.fromEntries(rs.merges);
+  const mergeMap = applyMergeMap ? Object.fromEntries(rs.merges) : {};
   ballots = applyMerges(ballots, mergeMap);
   ballots = dedupeRankings(ballots);
 
+  // Per EPAC rules a write-in voter puts their *entire* ranking (balloted
+  // candidates included) in the write-in box, so a counted write-in replaces
+  // whatever that row ranked in the rank columns rather than adding to it.
   for (const [originalIndex, action] of rs.writeInAssignments) {
     if (!action || action === "__drop__") continue;
     const parsedWriteIn = race.writeIns.find(w => w.originalIndex === originalIndex);
@@ -124,23 +139,17 @@ function ballotsForRace(raceId) {
     }
     if (namesToAdd.length === 0) continue;
 
-    namesToAdd = namesToAdd.map(n => mergeMap[n] ?? n);
-
-    let ballot = ballots.find(b => b.originalIndex === originalIndex);
-    if (!ballot) {
-      ballot = { ranking: [], weight: 1, originalIndex };
-      ballots.push(ballot);
-    }
-    for (const n of namesToAdd) {
-      if (!ballot.ranking.includes(n)) ballot.ranking.push(n);
-    }
+    const ranking = [...new Set(namesToAdd.map(n => mergeMap[n] ?? n))];
+    const ballot = ballots.find(b => b.originalIndex === originalIndex);
+    if (ballot) ballot.ranking = ranking;
+    else ballots.push({ ranking, weight: 1, originalIndex });
   }
   return ballots.filter(b => b.ranking.length > 0);
 }
 
-function candidatesForRace(raceId) {
+function candidatesForRace(raceId, opts) {
   const set = new Set();
-  for (const b of ballotsForRace(raceId)) for (const n of b.ranking) set.add(n);
+  for (const b of ballotsForRace(raceId, opts)) for (const n of b.ranking) set.add(n);
   return [...set];
 }
 
@@ -153,25 +162,28 @@ function renderRaceTabs() {
   }
   container.classList.remove("hidden");
   container.innerHTML = "";
-  for (const race of state.parsed.races) {
-    const rs = state.raceState.get(race.id);
+  state.parsed.races.forEach((race, i) => {
+    const active = race.id === state.activeRaceId;
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "race-tab" + (race.id === state.activeRaceId ? " active" : "");
+    btn.className = "race-tab" + (active ? " active" : "");
+    btn.setAttribute("aria-current", active ? "true" : "false");
     btn.innerHTML = `
-      <span class="race-tab-year">${race.classYear ?? "?"}</span>
+      <span class="race-tab-year">${race.classYear ?? i + 1}</span>
       <span class="race-tab-label">${escapeHtml(race.className)}</span>
-      <span class="race-tab-count">${race.ballots.length} ballots · ${race.candidates.length} cands${rs.result ? " · ✓ counted" : ""}</span>
+      <span class="race-tab-count">${plural(ballotsForRace(race.id).length, "ballot")} · ${plural(candidatesForRace(race.id).length, "candidate")}</span>
     `;
     btn.addEventListener("click", () => {
       state.activeRaceId = race.id;
       renderReview();
     });
     container.appendChild(btn);
-  }
+  });
 }
 
 // ───── Review screen (for active race) ─────
+// Every config change re-renders the whole screen: stats, tabs, write-in
+// dropdowns and the candidate list all depend on merges + write-ins.
 function renderReview() {
   const race = activeRace();
   if (!race) return;
@@ -180,7 +192,7 @@ function renderReview() {
   renderRaceTabs();
   renderRaceBanner();
 
-  document.getElementById("stat-ballots").textContent = race.ballots.length;
+  document.getElementById("stat-ballots").textContent = ballotsForRace(race.id).length;
   document.getElementById("stat-empty").textContent = race.emptyBallotIndices.length;
   document.getElementById("stat-candidates").textContent = candidatesForRace(race.id).length;
   document.getElementById("stat-writeins").textContent = race.writeIns.length;
@@ -197,12 +209,9 @@ function renderReview() {
   const runBtn = document.getElementById("run-count");
   const nextBtn = document.getElementById("next-race");
   if (state.parsed.races.length > 1) {
-    nextBtn.classList.remove("hidden");
-    nextBtn.disabled = !hasNext;
-    nextBtn.textContent = hasNext
-      ? `Next race (${state.parsed.races[idx + 1].className}) →`
-      : "Last race";
-    runBtn.textContent = "Run all counts →";
+    nextBtn.classList.toggle("hidden", !hasNext);
+    if (hasNext) nextBtn.textContent = `Next: ${state.parsed.races[idx + 1].className} →`;
+    runBtn.textContent = `Run all ${state.parsed.races.length} counts →`;
   } else {
     nextBtn.classList.add("hidden");
     runBtn.textContent = "Run the count →";
@@ -214,11 +223,9 @@ function renderRaceBanner() {
   const banner = document.getElementById("race-banner");
   const title = document.getElementById("review-screen-title");
 
-  if (state.parsed.races.length > 1) {
-    title.textContent = `Configure · ${race.className}`;
-  } else {
-    title.textContent = "Confirm the ballot before counting.";
-  }
+  title.textContent = state.parsed.races.length > 1
+    ? `Configure · ${race.className}`
+    : "Confirm the ballot before counting.";
 
   // Show header-mismatch warning if the rank headers disagreed with anchors.
   if (race.headerClassMismatch) {
@@ -238,8 +245,7 @@ function renderMergePanel() {
   const rs = activeRaceState();
   const panel = document.getElementById("merge-panel");
   const list = document.getElementById("merge-list");
-  const candidates = candidatesForRace(race.id);
-  const suggestions = suggestMerges(candidates);
+  const suggestions = suggestMerges(candidatesForRace(race.id, { applyMergeMap: false }));
 
   if (suggestions.length === 0) {
     panel.classList.add("hidden");
@@ -262,7 +268,7 @@ function renderMergePanel() {
             <span class="arrow">→</span>
             <span class="merge-canonical">"${escapeHtml(sug.canonical)}"</span>
           </div>
-          <div class="panel-sub" style="margin-top:4px; font-size:12px;">${sug.reason}</div>
+          <div class="merge-reason">${escapeHtml(sug.reason)}</div>
         </div>
       </label>
     `;
@@ -270,7 +276,7 @@ function renderMergePanel() {
     cb.addEventListener("change", () => {
       if (cb.checked) for (const v of variants) rs.merges.set(v, sug.canonical);
       else for (const v of variants) rs.merges.delete(v);
-      renderCandidateList();
+      renderReview();
     });
     list.appendChild(row);
   }
@@ -289,47 +295,62 @@ function renderWriteInPanel() {
   panel.classList.remove("hidden");
   list.innerHTML = "";
 
-  const knownCandidates = candidatesForRace(race.id);
+  const knownCandidates = candidatesForRace(race.id).sort((a, b) => a.localeCompare(b));
+
+  // Rows that used the rank columns *and* wrote in broke the ballot rules.
+  const rankedByRow = new Map(race.ballots.map(b => [b.originalIndex, b.ranking]));
+  const conflicts = race.writeIns.filter(w => rankedByRow.has(w.originalIndex)).length;
+  if (conflicts) {
+    const note = document.createElement("div");
+    note.className = "writein-conflict-summary";
+    note.innerHTML = `<strong>${plural(conflicts, "voter")}</strong> both ranked candidates and wrote in, which the rules don't allow.
+      By default the write-in is used as their full ballot and their rank-column choices are ignored. Review each flagged row below.`;
+    list.appendChild(note);
+  }
 
   for (const w of race.writeIns) {
-    if (!rs.writeInAssignments.has(w.originalIndex)) {
-      rs.writeInAssignments.set(w.originalIndex, w.parsed ? "__accept__" : "__drop__");
-    }
-    const currentAction = rs.writeInAssignments.get(w.originalIndex);
+    // An assigned name may since have been merged into its canonical form.
+    const assigned = rs.writeInAssignments.get(w.originalIndex);
+    const currentAction = rs.merges.get(assigned) ?? assigned;
+    const canAccept = !!w.parsed?.length;
+    const alsoRanked = rankedByRow.get(w.originalIndex);
 
     const row = document.createElement("div");
-    row.className = "writein-row";
-    const parsedHint = w.parsed
+    row.className = "writein-row" + (alsoRanked ? " has-conflict" : "");
+    const parsedHint = canAccept
       ? w.parsed.map(p => `#${p.rank} ${escapeHtml(p.name)}`).join(" · ")
-      : "(couldn't auto-parse — choose Drop or Assign to existing candidate)";
+      : "Couldn't auto-parse — drop it or assign it to a candidate.";
 
-    const opt = (val, label, enabled = true) => enabled
-      ? `<option value="${escapeAttr(val)}" ${currentAction === val ? "selected" : ""}>${escapeHtml(label)}</option>`
-      : "";
+    const opt = (val, label) =>
+      `<option value="${escapeHtml(val)}" ${currentAction === val ? "selected" : ""}>${escapeHtml(label)}</option>`;
 
     row.innerHTML = `
       <div class="writein-row-num">Row ${w.originalIndex}</div>
       <div class="writein-text">
         <div class="raw-label">Raw response</div>
-        "${escapeHtml(w.rawText)}"
-        <div class="raw-label" style="margin-top:8px;">Auto-parse</div>
-        <span class="mono">${parsedHint}</span>
+        <div class="writein-raw">"${escapeHtml(w.rawText)}"</div>
+        <div class="raw-label">Auto-parse</div>
+        <span class="mono ${canAccept ? "" : "writein-unparsed"}">${parsedHint}</span>
+        ${alsoRanked ? `
+          <div class="writein-conflict">
+            <span class="raw-label">Also ranked (rules violation)</span>
+            <span class="mono">${alsoRanked.map((n, i) => `#${i + 1} ${escapeHtml(n)}`).join(" · ")}</span>
+          </div>` : ""}
       </div>
       <div class="writein-action">
-        <select>
-          ${opt("__drop__", "Drop (don't count)")}
-          ${opt("__accept__", "Accept auto-parse", !!w.parsed)}
-          ${knownCandidates.map(c => opt(c, `Assign #1 → ${c}`)).join("")}
+        <select aria-label="Action for write-in on row ${w.originalIndex}">
+          ${opt("__drop__", alsoRanked ? "Ignore write-in (count ranked choices)" : "Drop (don't count)")}
+          ${canAccept ? opt("__accept__", alsoRanked ? "Use write-in as ballot" : "Accept auto-parse") : ""}
+          <optgroup label="Ballot is a single vote for">
+            ${knownCandidates.map(c => opt(c, c)).join("")}
+          </optgroup>
         </select>
       </div>
     `;
     const select = row.querySelector("select");
     select.addEventListener("change", () => {
       rs.writeInAssignments.set(w.originalIndex, select.value);
-      renderCandidateList();
-      renderMergePanel();
-      updateReviewStats();
-      renderRaceTabs();  // tab counts may have changed
+      renderReview();
     });
     list.appendChild(row);
   }
@@ -340,20 +361,21 @@ function renderCandidateList() {
   const rs = activeRaceState();
   const list = document.getElementById("candidate-list");
   const ballots = ballotsForRace(race.id);
-  const candidates = candidatesForRace(race.id);
   const firstPrefs = tallyFirstPreferences(ballots);
 
-  const sorted = [...candidates].sort((a, b) => (firstPrefs.get(b) ?? 0) - (firstPrefs.get(a) ?? 0));
+  const sorted = candidatesForRace(race.id)
+    .sort((a, b) => (firstPrefs.get(b) ?? 0) - (firstPrefs.get(a) ?? 0) || a.localeCompare(b));
   list.innerHTML = "";
   for (const c of sorted) {
     const count = firstPrefs.get(c) ?? 0;
-    const row = document.createElement("div");
-    row.className = "cand-row";
     const excluded = rs.excluded.has(c);
+    const row = document.createElement("label");
+    row.className = "cand-row";
+    row.title = "Tick to exclude from the count";
     row.innerHTML = `
-      <input type="checkbox" ${excluded ? "checked" : ""} title="Exclude from count" />
-      <div class="cand-name ${excluded ? "excluded" : ""}">${escapeHtml(c)}</div>
-      <div class="cand-tally">${count} first-pref</div>
+      <input type="checkbox" ${excluded ? "checked" : ""} />
+      <span class="cand-name ${excluded ? "excluded" : ""}">${escapeHtml(c)}</span>
+      <span class="cand-tally">${count} first-pref</span>
     `;
     const cb = row.querySelector("input");
     cb.addEventListener("change", () => {
@@ -365,28 +387,16 @@ function renderCandidateList() {
   }
 }
 
-function updateReviewStats() {
-  const race = activeRace();
-  document.getElementById("stat-ballots").textContent = ballotsForRace(race.id).length;
-  document.getElementById("stat-candidates").textContent = candidatesForRace(race.id).length;
-}
-
 // ───── Seats control ─────
-document.getElementById("seats-inc").addEventListener("click", () => {
+const seatsInput = document.getElementById("seats-input");
+function setSeats(n) {
   const rs = activeRaceState();
-  rs.seats = Math.max(1, rs.seats + 1);
-  document.getElementById("seats-input").value = rs.seats;
-});
-document.getElementById("seats-dec").addEventListener("click", () => {
-  const rs = activeRaceState();
-  rs.seats = Math.max(1, rs.seats - 1);
-  document.getElementById("seats-input").value = rs.seats;
-});
-document.getElementById("seats-input").addEventListener("change", e => {
-  const rs = activeRaceState();
-  rs.seats = Math.max(1, parseInt(e.target.value || "1", 10));
-  e.target.value = rs.seats;
-});
+  rs.seats = Number.isFinite(n) ? Math.min(99, Math.max(1, Math.round(n))) : rs.seats;
+  seatsInput.value = rs.seats;
+}
+document.getElementById("seats-inc").addEventListener("click", () => setSeats(activeRaceState().seats + 1));
+document.getElementById("seats-dec").addEventListener("click", () => setSeats(activeRaceState().seats - 1));
+seatsInput.addEventListener("change", () => setSeats(parseInt(seatsInput.value, 10)));
 
 // ───── Next race / back ─────
 document.getElementById("next-race").addEventListener("click", () => {
@@ -394,6 +404,7 @@ document.getElementById("next-race").addEventListener("click", () => {
   if (idx >= 0 && idx < state.parsed.races.length - 1) {
     state.activeRaceId = state.parsed.races[idx + 1].id;
     renderReview();
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 });
 document.getElementById("back-to-upload").addEventListener("click", () => {
@@ -407,16 +418,20 @@ document.getElementById("back-to-review").addEventListener("click", () => {
 
 // ───── Run all counts ─────
 document.getElementById("run-count").addEventListener("click", () => {
-  try {
-    for (const race of state.parsed.races) {
+  for (const race of state.parsed.races) {
+    try {
       runRaceCount(race.id);
+    } catch (err) {
+      console.error(err);
+      // Jump to the race that failed so it can be fixed right away.
+      state.activeRaceId = race.id;
+      renderReview();
+      alert(`Count failed for ${race.className}: ${err.message || String(err)}`);
+      return;
     }
-    renderResults();
-    show("screen-results");
-  } catch (err) {
-    console.error(err);
-    alert("Count failed: " + (err.message || String(err)));
   }
+  renderResults();
+  show("screen-results");
 });
 
 function runRaceCount(raceId) {
@@ -439,38 +454,43 @@ function renderResults() {
   head.innerHTML = `
     <div class="result-eyebrow">Results${fileLabel}</div>
     <h1 class="result-title">${raceCount === 1 ? "Election count" : `${raceCount} elections counted`}</h1>
-    <p class="result-meta">${summarizeAllResults()}</p>
+    ${raceCount > 1 ? buildSummaryHTML() : ""}
   `;
 
   const wrap = document.getElementById("results-stack");
   wrap.innerHTML = "";
-  for (const race of state.parsed.races) {
-    wrap.appendChild(buildRaceResultsSection(race));
-  }
+  state.parsed.races.forEach((race, i) => {
+    wrap.appendChild(buildRaceResultsSection(race, i));
+  });
 }
 
-function summarizeAllResults() {
-  const chunks = [];
-  for (const race of state.parsed.races) {
-    const rs = state.raceState.get(race.id);
-    const r = rs.result;
-    if (!r) continue;
-    chunks.push(`${race.className}: ${r.winners.join(", ")}`);
-  }
-  return chunks.join(" · ");
+// One line per race, linking down to its section.
+function buildSummaryHTML() {
+  const rows = state.parsed.races.map(race => {
+    const r = state.raceState.get(race.id).result;
+    return `
+      <li>
+        <a href="#result-${escapeHtml(race.id)}">${escapeHtml(race.className)}</a>
+        <span>${r ? r.winners.map(escapeHtml).join(", ") : "—"}</span>
+      </li>`;
+  });
+  return `<ul class="result-summary">${rows.join("")}</ul>`;
 }
 
-function buildRaceResultsSection(race) {
+function buildRaceResultsSection(race, index) {
   const rs = state.raceState.get(race.id);
   const r = rs.result;
+  const raceCount = state.parsed.races.length;
   const section = document.createElement("section");
   section.className = "race-result";
   section.id = `result-${race.id}`;
 
+  const eyebrow = raceCount > 1 ? `<div class="race-result-eyebrow">Race ${index + 1} of ${raceCount}</div>` : "";
+
   if (!r) {
     section.innerHTML = `
       <div class="race-result-head">
-        <div class="race-result-eyebrow">Class of ${race.classYear ?? "?"}</div>
+        ${eyebrow}
         <h2 class="race-result-title">${escapeHtml(race.className)}</h2>
         <p class="race-result-meta">No count run.</p>
       </div>
@@ -482,14 +502,19 @@ function buildRaceResultsSection(race) {
     ? `<div class="banner-warn small">Header-class disagreement: ${escapeHtml(race.headerClassMismatch)}</div>`
     : "";
 
+  const meta = [
+    plural(r.totalBallots, "ballot"),
+    `Droop quota ${r.quota}`,
+    plural(r.rounds.length, "round"),
+    `${r.exhaustedBallots} exhausted`
+  ];
+  if (r.excluded.length) meta.push(`excluded: ${r.excluded.map(escapeHtml).join(", ")}`);
+
   section.innerHTML = `
     <div class="race-result-head">
-      <div class="race-result-eyebrow">Class of ${race.classYear ?? "?"}</div>
+      ${eyebrow}
       <h2 class="race-result-title">${escapeHtml(race.className)}</h2>
-      <p class="race-result-meta">
-        ${r.totalBallots} ballots · Droop quota ${r.quota} · ${r.rounds.length} rounds ·
-        ${r.exhaustedBallots} exhausted${r.excluded.length ? " · excluded: " + r.excluded.map(escapeHtml).join(", ") : ""}
-      </p>
+      <p class="race-result-meta">${meta.join(" · ")}</p>
       ${mismatchBanner}
     </div>
     <div class="winners-board">${buildWinnersHTML(r)}</div>
@@ -499,43 +524,50 @@ function buildRaceResultsSection(race) {
     </details>
     <div class="panel inner-panel">
       <div class="panel-head">
-        <h3>Rerun for ${escapeHtml(race.className)}</h3>
+        <h3>Rerun ${escapeHtml(race.className)}</h3>
         <p class="panel-sub">Use "Add a seat" if a winner declines and you need the next-best candidate. Use "Exclude" to drop a candidate entirely and recount fresh.</p>
       </div>
       <div class="rerun-grid">
         <div class="rerun-card">
           <div class="rerun-label">Current seats</div>
           <div class="rerun-value">${r.seats}</div>
-          <button class="btn-primary btn-full" data-action="add-seat" data-race="${race.id}">+ Add a seat &amp; re-count</button>
+          <button class="btn-primary btn-full" type="button" data-action="add-seat">+ Add a seat &amp; re-count</button>
         </div>
         <div class="rerun-card">
           <div class="rerun-label">Exclude candidates</div>
-          <div class="exclusion-list" data-race="${race.id}">${buildExclusionListHTML(race.id)}</div>
-          <button class="btn-secondary btn-full" data-action="apply-exclusions" data-race="${race.id}">Re-count with exclusions</button>
+          <div class="exclusion-list">${buildExclusionListHTML(race.id)}</div>
+          <button class="btn-secondary btn-full" type="button" data-action="apply-exclusions">Re-count with exclusions</button>
         </div>
       </div>
     </div>
   `;
 
-  // Wire up the per-race buttons.
+  // Wire up the per-race buttons. Exclusions are staged in the checkboxes and
+  // only committed when "Re-count" is clicked, so a failed recount is a no-op.
   section.querySelector('[data-action="add-seat"]').addEventListener("click", () => {
-    const rs2 = state.raceState.get(race.id);
-    rs2.seats += 1;
-    try { runRaceCount(race.id); renderResults(); }
-    catch (err) { rs2.seats -= 1; alert(err.message); }
+    rerun(race.id, rs2 => { rs2.seats += 1; });
   });
   section.querySelector('[data-action="apply-exclusions"]').addEventListener("click", () => {
-    try { runRaceCount(race.id); renderResults(); }
-    catch (err) { alert(err.message); }
+    const picked = [...section.querySelectorAll(".exclusion-list input:checked")].map(cb => cb.dataset.name);
+    rerun(race.id, rs2 => { rs2.excluded = new Set(picked); });
   });
-  for (const cb of section.querySelectorAll(`.exclusion-list input[type=checkbox]`)) {
-    cb.addEventListener("change", () => {
-      const name = cb.dataset.name;
-      const rs2 = state.raceState.get(race.id);
-      if (cb.checked) rs2.excluded.add(name); else rs2.excluded.delete(name);
-    });
-  }
   return section;
+}
+
+// Apply a config change and recount; roll the change back if the count fails.
+function rerun(raceId, mutate) {
+  const rs = state.raceState.get(raceId);
+  const saved = { seats: rs.seats, excluded: new Set(rs.excluded) };
+  mutate(rs);
+  try {
+    runRaceCount(raceId);
+  } catch (err) {
+    Object.assign(rs, saved);
+    alert(err.message || String(err));
+    return;
+  }
+  renderResults();
+  document.getElementById(`result-${raceId}`)?.scrollIntoView({ block: "start" });
 }
 
 function buildWinnersHTML(r) {
@@ -557,12 +589,10 @@ function buildWinnersHTML(r) {
 function buildRoundsTableHTML(r) {
   const allCands = new Set();
   for (const round of r.rounds) for (const [c] of round.tally) allCands.add(c);
-  for (const e of r.electedDetail) allCands.add(e.name);
-  for (const e of r.eliminatedDetail) allCands.add(e.name);
 
   const winnerSet = new Set(r.winners);
   const orderedCands = [
-    ...r.electedDetail.map(e => e.name),
+    ...r.winners,
     ...[...allCands].filter(c => !winnerSet.has(c)).sort((a, b) => peakTally(r, b) - peakTally(r, a))
   ];
 
@@ -574,8 +604,7 @@ function buildRoundsTableHTML(r) {
   for (const cand of orderedCands) {
     html += `<tr><td class="name-col">${escapeHtml(cand)}</td>`;
     for (const rd of r.rounds) {
-      const tallyMap = new Map(rd.tally);
-      const val = tallyMap.get(cand);
+      const val = new Map(rd.tally).get(cand);
       const electEvent = rd.events.find(e => (e.type === "elect" || e.type === "elect-default") && e.candidate === cand);
       const elimEvent  = rd.events.find(e => e.type === "eliminate" && e.candidate === cand);
       if (electEvent)     html += `<td class="status-elect">${(electEvent.tally ?? val ?? 0).toFixed(2)} ✓</td>`;
@@ -595,14 +624,12 @@ function buildRoundsTableHTML(r) {
 }
 
 function buildExclusionListHTML(raceId) {
-  const race = getRaceById(raceId);
   const rs = state.raceState.get(raceId);
-  const cands = candidatesForRace(raceId);
   const winnersSet = new Set(rs.result?.winners ?? []);
-  return cands.map(c => `
+  return candidatesForRace(raceId).map(c => `
     <label>
-      <input type="checkbox" data-name="${escapeAttr(c)}" ${rs.excluded.has(c) ? "checked" : ""} />
-      <span>${escapeHtml(c)}${winnersSet.has(c) ? ' <span class="mono" style="color:var(--forest);">(currently elected)</span>' : ""}</span>
+      <input type="checkbox" data-name="${escapeHtml(c)}" ${rs.excluded.has(c) ? "checked" : ""} />
+      <span>${escapeHtml(c)}${winnersSet.has(c) ? ' <span class="elected-tag">elected</span>' : ""}</span>
     </label>
   `).join("");
 }
@@ -616,36 +643,34 @@ function peakTally(result, candidate) {
 
 // ───── Downloads ─────
 document.getElementById("download-csv").addEventListener("click", () => {
-  const lines = [];
-  lines.push(`EPAC Ranked-Choice Counter`);
-  lines.push(`Source file,${state.fileName ?? ""}`);
-  lines.push(`Generated,${new Date().toISOString()}`);
-  lines.push("");
+  const rows = [
+    ["EPAC Ranked-Choice Counter"],
+    ["Source file", state.fileName ?? ""],
+    ["Generated", new Date().toISOString()],
+    []
+  ];
   for (const race of state.parsed.races) {
-    const rs = state.raceState.get(race.id);
-    const r = rs.result;
+    const r = state.raceState.get(race.id).result;
     if (!r) continue;
-    lines.push(`Race,${race.className}`);
-    lines.push(`Total valid ballots,${r.totalBallots}`);
-    lines.push(`Droop quota,${r.quota}`);
-    lines.push(`Seats filled,${r.seats}`);
-    lines.push(`Exhausted ballots,${r.exhaustedBallots}`);
-    lines.push(`Excluded,"${r.excluded.join("; ")}"`);
-    lines.push("");
-    lines.push("Rank,Winner,Round elected,Vote-weight at election");
-    r.electedDetail.forEach((w, i) => {
-      lines.push(`${i + 1},"${w.name}",${w.round},${w.tally.toFixed(4)}`);
-    });
-    lines.push("");
-    lines.push("Elimination order");
-    lines.push("Round,Candidate,Tally");
-    r.eliminatedDetail.forEach(e => {
-      lines.push(`${e.round},"${e.name}",${e.tally.toFixed(4)}`);
-    });
-    lines.push("");
-    lines.push("");
+    rows.push(
+      ["Race", race.className],
+      ["Total valid ballots", r.totalBallots],
+      ["Droop quota", r.quota],
+      ["Seats filled", r.seats],
+      ["Exhausted ballots", r.exhaustedBallots],
+      ["Excluded", r.excluded.join("; ")],
+      [],
+      ["Rank", "Winner", "Round elected", "Vote-weight at election"],
+      ...r.electedDetail.map((w, i) => [i + 1, w.name, w.round, w.tally.toFixed(4)]),
+      [],
+      ["Elimination order"],
+      ["Round", "Candidate", "Tally"],
+      ...r.eliminatedDetail.map(e => [e.round, e.name, e.tally.toFixed(4)]),
+      [],
+      []
+    );
   }
-  downloadBlob(lines.join("\n"), "text/csv", "epac-results.csv");
+  downloadBlob(rows.map(row => row.map(csvCell).join(",")).join("\n"), "text/csv", "epac-results.csv");
 });
 
 document.getElementById("download-json").addEventListener("click", () => {
@@ -693,9 +718,13 @@ function downloadBlob(content, mime, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 500);
 }
 
-// ───── Escape helpers ─────
+// ───── Formatting helpers ─────
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, ch =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 }
-function escapeAttr(s) { return escapeHtml(s).replace(/"/g, "&quot;"); }
+function csvCell(v) {
+  const s = String(v ?? "");
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function plural(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }

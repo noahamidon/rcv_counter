@@ -41,7 +41,7 @@
         <p class="hero-lede">Drop the raw CSV you downloaded from the Dartmouth survey tool. The counter auto-detects the rank columns and separates distinct ranked-choice races — whether the file has 1 race (Fall) or 3 (Spring).</p>
       </div>
 
-      <label id="drop-zone" class="drop-zone" for="file-input">
+      <label id="drop-zone" class="drop-zone" for="file-input" tabindex="0" role="button" aria-label="Upload ballot CSV">
         <div class="drop-icon" aria-hidden="true">
           <svg viewBox="0 0 48 48" width="48" height="48">
             <path d="M24 32 L24 10 M14 20 L24 10 L34 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/>
@@ -118,7 +118,7 @@
       <div id="writein-panel" class="panel hidden">
         <div class="panel-head">
           <h2>Write-in review</h2>
-          <p class="panel-sub">Voters left free-form responses in this race's write-in column. Decide what to do with each. Anything not assigned is dropped from the count.</p>
+          <p class="panel-sub">Voters who write in must put their whole ranking — balloted candidates included — in the write-in box. A counted write-in becomes that voter's entire ballot; a dropped one isn't counted.</p>
         </div>
         <div id="writein-list" class="writein-list"></div>
       </div>
@@ -134,16 +134,16 @@
       <div class="panel seats-panel">
         <div class="panel-head">
           <h2>Seats to fill</h2>
-          <p class="panel-sub">EPAC's General Senator races default to 2. If a winner later declines, come back and add a seat to promote the next candidate.</p>
+          <p class="panel-sub">EPAC's General Senator races default to 2. If a winner later declines, add a seat from the results screen to promote the next candidate.</p>
         </div>
         <div class="seats-control">
-          <button class="seats-btn" id="seats-dec" type="button" aria-label="Decrease">−</button>
-          <input type="number" id="seats-input" value="2" min="1" max="99" />
-          <button class="seats-btn" id="seats-inc" type="button" aria-label="Increase">+</button>
+          <button class="seats-btn" id="seats-dec" type="button" aria-label="Decrease seats">−</button>
+          <input type="number" id="seats-input" value="2" min="1" max="99" aria-label="Seats to fill" />
+          <button class="seats-btn" id="seats-inc" type="button" aria-label="Increase seats">+</button>
         </div>
       </div>
 
-      <div class="action-row">
+      <div class="action-row action-row-sticky">
         <button class="btn-secondary" id="back-to-upload" type="button">← Upload a different file</button>
         <div class="action-group">
           <button class="btn-ghost hidden" id="next-race" type="button">Next race →</button>
@@ -187,7 +187,7 @@
   <div class="wrap">
     <span>WIGM / Droop-quota STV · Dartmouth EPAC</span>
     <span class="endnote-sep">·</span>
-    <a href="https://github.com/" id="gh-link">Source &amp; docs →</a>
+    <a href="https://github.com/noahamidon/rcv_counter" id="gh-link">Source &amp; docs →</a>
   </div>
 </footer>
 
